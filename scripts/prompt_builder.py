@@ -1,0 +1,292 @@
+"""
+Prompt builder for all experimental settings (S0-S5, S4R, S4F, E0-E4).
+
+Each build_* function returns a complete prompt string given a dataset record.
+The SYSTEM_PROMPT is shared across all settings.
+"""
+
+# --------------------------------------------------------------------------- #
+#  System prompt (shared)
+# --------------------------------------------------------------------------- #
+
+SYSTEM_PROMPT = (
+    "You are an expert software engineer specializing in automated program "
+    "repair. Your task is to assess whether a given patch correctly fixes the "
+    "bug in the original code, or whether it is an overfitting patch that "
+    "passes tests but does not truly fix the underlying issue."
+)
+
+# --------------------------------------------------------------------------- #
+#  Output format block (shared)
+# --------------------------------------------------------------------------- #
+
+OUTPUT_FORMAT = """## Output Format
+Respond with ONLY a JSON object in the following format (no markdown, no extra text):
+{"label": "<correct|overfitting|uncertain>", "confidence": <1-5>, "explanation": "<your reasoning in 2-4 sentences>"}
+
+- label: "correct" if the patch properly fixes the bug, "overfitting" if it only superficially passes tests without truly fixing the issue, or "uncertain" if you cannot determine.
+- confidence: 1 (very uncertain) to 5 (very confident).
+- explanation: concise reasoning for your judgment."""
+
+# --------------------------------------------------------------------------- #
+#  Helper: format buggy code from record
+# --------------------------------------------------------------------------- #
+
+PROJECT_DISPLAY_NAMES = {
+    "Chart": "JFreeChart",
+    "Closure": "Google Closure Compiler",
+    "Lang": "Apache Commons Lang",
+    "Math": "Apache Commons Math",
+    "Time": "Joda-Time",
+}
+
+
+def _buggy_code_block(record):
+    parts = []
+    for func in record.get("buggy_functions", []):
+        path = func.get("path", "")
+        code = func.get("buggy_code", "")
+        if path:
+            parts.append(f"// File: {path}")
+        parts.append(code)
+    return "\n".join(parts).strip()
+
+
+def _test_cases_block(record):
+    tc = record.get("test_cases", {})
+    if not tc:
+        return ""
+    parts = []
+    for name, code in tc.items():
+        parts.append(f"// {name}\n{code}")
+    return "\n\n".join(parts)
+
+
+def _execution_trace_block(record):
+    traces = record.get("execution_traces", [])
+    if not traces:
+        return ""
+    bug_desc = record.get("bug_description", [])
+    parts = []
+    if bug_desc:
+        descs = bug_desc if isinstance(bug_desc, list) else [bug_desc]
+        for d in descs:
+            if d:
+                parts.append(f"Error: {d}")
+    for t in traces:
+        trimmed = t.strip()
+        lines = trimmed.split("\n")
+        if len(lines) > 10:
+            trimmed = "\n".join(lines[:10]) + "\n... (truncated)"
+        parts.append(trimmed)
+    return "\n".join(parts)
+
+
+def _coverage_block(record):
+    return record.get("coverage_summary", "").strip()
+
+
+# --------------------------------------------------------------------------- #
+#  Core prompt assembly
+# --------------------------------------------------------------------------- #
+
+def _base_prompt(record):
+    """Build the S0/E0 base prompt: buggy code + patch diff + instructions."""
+    buggy_code = _buggy_code_block(record)
+    patch_diff = record.get("patch_diff", "")
+
+    prompt = f"""## Buggy Code
+{buggy_code}
+
+## Patch Diff
+{patch_diff}
+
+## Instructions
+1. Analyze the buggy code to understand the fault.
+2. Analyze the patch to understand the modification.
+3. Determine whether the patch correctly fixes the bug, or whether it is an overfitting patch that passes tests but does not truly fix the issue.
+
+{OUTPUT_FORMAT}"""
+    return prompt
+
+
+# --------------------------------------------------------------------------- #
+#  S-series: Leakage settings (RQ2)
+# --------------------------------------------------------------------------- #
+
+def build_s0(record):
+    """Sanitized baseline — buggy code + patch diff only."""
+    return _base_prompt(record)
+
+
+def build_s1(record):
+    """S0 + bug identifier."""
+    base = _base_prompt(record)
+    bug_id = record.get("meta_bug_id", "")
+    section = f"\n\n## Bug Identifier\n{bug_id}"
+    return _insert_before_output(base, section)
+
+
+def build_s2(record):
+    """S0 + project name."""
+    base = _base_prompt(record)
+    project = record.get("meta_project", "")
+    display = PROJECT_DISPLAY_NAMES.get(project, project)
+    section = f"\n\n## Project\nThis code is from the {display} project."
+    return _insert_before_output(base, section)
+
+
+def build_s3(record):
+    """S0 + repair tool name."""
+    base = _base_prompt(record)
+    tool = record.get("meta_tool", "")
+    section = f"\n\n## Repair Tool\nThis patch was generated by the automated program repair tool: {tool}."
+    return _insert_before_output(base, section)
+
+
+def build_s4(record):
+    """S0 + bug id + project + tool (full identifying info)."""
+    base = _base_prompt(record)
+    bug_id = record.get("meta_bug_id", "")
+    project = record.get("meta_project", "")
+    display = PROJECT_DISPLAY_NAMES.get(project, project)
+    tool = record.get("meta_tool", "")
+    section = f"""\n\n## Bug Identifier\n{bug_id}
+
+## Project\nThis code is from the {display} project.
+
+## Repair Tool\nThis patch was generated by the automated program repair tool: {tool}."""
+    return _insert_before_output(base, section)
+
+
+def build_s4r(record):
+    """S0 + randomly shuffled bug id + project + tool metadata."""
+    base = _base_prompt(record)
+    bug_id = record.get("shuffled_meta_bug_id", "")
+    project = record.get("shuffled_meta_project", "")
+    display = PROJECT_DISPLAY_NAMES.get(project, project)
+    tool = record.get("shuffled_meta_tool", "")
+    section = f"""\n\n## Bug Identifier\n{bug_id}
+
+## Project\nThis code is from the {display} project.
+
+## Repair Tool\nThis patch was generated by the automated program repair tool: {tool}."""
+    return _insert_before_output(base, section)
+
+
+def build_s4f(record):
+    """S0 + fake bug id plus real project and tool metadata."""
+    base = _base_prompt(record)
+    bug_id = record.get("fake_meta_bug_id", "")
+    project = record.get("meta_project", "")
+    display = PROJECT_DISPLAY_NAMES.get(project, project)
+    tool = record.get("meta_tool", "")
+    section = f"""\n\n## Bug Identifier\n{bug_id}
+
+## Project\nThis code is from the {display} project.
+
+## Repair Tool\nThis patch was generated by the automated program repair tool: {tool}."""
+    return _insert_before_output(base, section)
+
+
+def build_s5(record):
+    """S0 + developer/reference patch."""
+    base = _base_prompt(record)
+    dev_diff = record.get("developer_patch_diff", "")
+    if not dev_diff:
+        return base
+    section = f"\n\n## Developer Patch (Reference)\nThe following is a patch written by a developer for the same bug:\n{dev_diff}"
+    return _insert_before_output(base, section)
+
+
+# --------------------------------------------------------------------------- #
+#  E-series: Evidence settings (RQ3)
+# --------------------------------------------------------------------------- #
+
+def build_e0(record):
+    """Patch-only baseline — same as S0."""
+    return _base_prompt(record)
+
+
+def build_e1(record):
+    """E0 + failing test code."""
+    base = _base_prompt(record)
+    test_block = _test_cases_block(record)
+    if not test_block:
+        test_block = "No test code available."
+    section = f"\n\n## Failing Test Code\n{test_block}"
+    return _insert_before_output(base, section)
+
+
+def build_e2(record):
+    """E0 + 'all tests passed' declaration."""
+    base = _base_prompt(record)
+    section = "\n\n## Test Execution Result\nAll existing test cases passed after applying this patch."
+    return _insert_before_output(base, section)
+
+
+def build_e3(record):
+    """E0 + execution trace / bug description / coverage."""
+    base = _base_prompt(record)
+    trace = _execution_trace_block(record)
+    coverage = _coverage_block(record)
+    parts = []
+    if trace:
+        parts.append(f"### Error and Stack Trace (before patch)\n{trace}")
+    if coverage:
+        parts.append(f"### Coverage Summary\n{coverage}")
+    if not parts:
+        parts.append("No execution information available.")
+    section = "\n\n## Execution Information\n" + "\n\n".join(parts)
+    return _insert_before_output(base, section)
+
+
+def build_e4(record):
+    """E0 + developer/reference patch."""
+    return build_s5(record)
+
+
+# --------------------------------------------------------------------------- #
+#  Utility
+# --------------------------------------------------------------------------- #
+
+def _insert_before_output(prompt, section):
+    """Insert an additional section before the Output Format block."""
+    marker = "## Output Format"
+    idx = prompt.find(marker)
+    if idx == -1:
+        return prompt + section
+    return prompt[:idx].rstrip() + section + "\n\n" + prompt[idx:]
+
+
+# --------------------------------------------------------------------------- #
+#  Registry
+# --------------------------------------------------------------------------- #
+
+SETTING_BUILDERS = {
+    "S0": build_s0,
+    "S1": build_s1,
+    "S2": build_s2,
+    "S3": build_s3,
+    "S4": build_s4,
+    "S4R": build_s4r,
+    "S4F": build_s4f,
+    "S5": build_s5,
+    "E0": build_e0,
+    "E1": build_e1,
+    "E2": build_e2,
+    "E3": build_e3,
+    "E4": build_e4,
+}
+
+ALL_SETTINGS = list(SETTING_BUILDERS.keys())
+LEAKAGE_SETTINGS = ["S0", "S1", "S2", "S3", "S4", "S4R", "S4F", "S5"]
+EVIDENCE_SETTINGS = ["E0", "E1", "E2", "E3", "E4"]
+
+
+def build_prompt(record, setting):
+    """Build a prompt for a given record and setting ID."""
+    builder = SETTING_BUILDERS.get(setting)
+    if builder is None:
+        raise ValueError(f"Unknown setting: {setting}")
+    return builder(record)

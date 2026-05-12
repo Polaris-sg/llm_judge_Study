@@ -1,0 +1,3 @@
+
+OPENAI_API_KEY = "sk-..."
+OPENAI_BASE_URL = "https://api.openai.com/v1"
