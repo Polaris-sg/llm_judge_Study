@@ -8,10 +8,10 @@ APR tools can generate overfitting patches: patches that pass available tests bu
 
 The study considers four research questions:
 
-- RQ1: How well do LLM judgments agree with ground-truth patch correctness labels?
-- RQ2: Does benchmark-identifying metadata bias LLM judgments?
-- RQ3: Do additional evidence types improve LLM-judge reliability?
-- RQ4: What lightweight patch assessment protocol should be recommended?
+- RQ1: What is the agreement between LLM Judge and human ground-truth labels under sanitized conditions?
+- RQ2: Does exposing benchmark-identifying information to LLM Judge systematically shift its judgments?
+- RQ3: Does the type and content of evidence included in the prompt systematically bias LLM Judge toward labelling overfitting patches as correct?
+- RQ4: Do the natural language explanations produced by LLM Judge provide trustworthy reasoning, or do they contain hallucinated or unsupported claims?
 
 ## Repository Structure
 
